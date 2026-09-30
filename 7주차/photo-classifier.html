@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<!-- ============================================================
+     7주차 · Static Space 에 올리는 사진 분류기  (index.html)
+     ------------------------------------------------------------
+     이 파일 하나에 화면(HTML) · 모양(CSS) · 모델 실행(JavaScript)이 모두 들어 있음
+     Static Space 는 이 파일을 그대로 보내 주고, 모델은 방문자의 브라우저에서 실행됨
+     ★ 고칠 곳 표시가 붙은 줄만 바꾸면 내 데모가 됨
+     ============================================================ -->
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>사진 분류기</title>   <!-- ★ 고칠 곳 ① : 브라우저 탭에 보이는 이름 -->
+  <style>
+    /* 화면 모양 — 바꾸지 않아도 됨 */
+    body { font-family: "맑은 고딕", sans-serif; max-width: 720px; margin: 24px auto; padding: 0 16px; color: #202124; }
+    h1 { font-size: 24px; margin-bottom: 4px; }
+    .sub { color: #5f6368; margin-top: 0; }
+    #status { display: block; margin: 12px 0; padding: 8px 12px; background: #f1f3f4; border-radius: 6px; }
+    #preview { max-width: 100%; max-height: 320px; display: none; margin: 12px 0; border-radius: 6px; }
+    .row { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+    .name { width: 220px; font-size: 14px; }
+    .bar { height: 14px; background: #e8710a; border-radius: 3px; }
+    .score { font-size: 13px; color: #5f6368; }
+    button { padding: 6px 14px; }
+  </style>
+</head>
+<body>
+  <!-- ★ 고칠 곳 ② : 화면 제목과 설명 -->
+  <h1>사진 분류기</h1>
+  <p class="sub">사진을 고르면 브라우저 안에서 모델이 무엇인지 맞힘</p>
+
+  <!-- 화면 부품 : 파일 고르기 · 예시 버튼 · 상태 칸 · 사진 · 결과 -->
+  <input id="upload" type="file" accept="image/*" />
+  <button id="example">예시 사진으로 해 보기</button>
+  <span id="status">모델 불러오는 중...</span>
+  <img id="preview" alt="올린 사진" />
+  <div id="result"></div>
+
+  <script type="module">
+    // Transformers.js : 허깅페이스 모델을 브라우저 안에서 실행해 주는 라이브러리 (버전 고정)
+    import { pipeline } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.6";
+
+    // ★ 고칠 곳 ③ : 쓸 모델과 예시 사진 주소
+    const TASK = "image-classification";
+    const MODEL_NAME = "Xenova/vit-base-patch16-224";
+    const EXAMPLE_URL = "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/coco_sample.png";
+
+    // 화면 부품을 이름으로 찾아 둔다
+    const statusBox = document.getElementById("status");
+    const uploadInput = document.getElementById("upload");
+    const exampleButton = document.getElementById("example");
+    const previewImage = document.getElementById("preview");
+    const resultBox = document.getElementById("result");
+
+    // 모델 불러오기 (페이지를 열 때 한 번) — 걸린 시간을 잰다
+    let classifier = null;
+    let loadSeconds = "";
+    try {
+      const loadStart = performance.now();
+      classifier = await pipeline(TASK, MODEL_NAME);
+      loadSeconds = ((performance.now() - loadStart) / 1000).toFixed(1);
+      statusBox.textContent = `준비 완료 · 모델 불러오기 ${loadSeconds}초`;
+    } catch (error) {
+      // 모델 이름이 틀렸거나 브라우저용(ONNX) 파일이 없는 모델이면 여기로 옴
+      statusBox.textContent = `❌ 모델을 불러오지 못함 (${MODEL_NAME}) : ${error.message}`;
+    }
+
+    // 사진을 받아 점수가 높은 5개를 막대로 보여 준다
+    async function classifyImage(imageUrl) {
+      if (classifier === null) return;           // 모델이 없으면 아무것도 하지 않음
+      previewImage.src = imageUrl;
+      previewImage.style.display = "block";
+      resultBox.innerHTML = "";
+      statusBox.textContent = "분류하는 중...";
+
+      const start = performance.now();
+      const results = await classifier(imageUrl, { top_k: 5 });
+      const seconds = ((performance.now() - start) / 1000).toFixed(1);
+
+      statusBox.textContent = `분류 ${seconds}초 · (모델 불러오기 ${loadSeconds}초)`;
+      results.forEach(({ label, score }) => {
+        resultBox.innerHTML += `
+          <div class="row">
+            <span class="name">${label}</span>
+            <div class="bar" style="width:${Math.round(score * 300)}px"></div>
+            <span class="score">${(score * 100).toFixed(1)}%</span>
+          </div>`;
+      });
+    }
+
+    // 예시 버튼을 누르면 예시 사진으로 분류
+    exampleButton.addEventListener("click", () => classifyImage(EXAMPLE_URL));
+
+    // 파일을 고르면 그 사진으로 분류
+    uploadInput.addEventListener("change", (event) => {
+      const file = event.target.files[0];
+      if (!file) return;                          // 고르다가 취소한 경우
+      const reader = new FileReader();
+      reader.onload = (e) => classifyImage(e.target.result);
+      reader.readAsDataURL(file);
+    });
+  </script>
+</body>
+</html>

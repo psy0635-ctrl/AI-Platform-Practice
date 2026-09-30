@@ -1,0 +1,711 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>음성 번역기 · 한국어 → 영어</title>
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: "맑은 고딕", sans-serif;
+      max-width: 720px;
+      margin: 24px auto;
+      padding: 0 16px;
+      color: #202124;
+      line-height: 1.6;
+    }
+
+    h1 {
+      font-size: 24px;
+      margin-bottom: 4px;
+    }
+
+    .sub,
+    .note {
+      color: #5f6368;
+      font-size: 14px;
+    }
+
+    .sub {
+      margin-top: 0;
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 16px 0;
+    }
+
+    button {
+      min-height: 44px;
+      padding: 8px 14px;
+      border: 1px solid #dadce0;
+      border-radius: 8px;
+      background: #fff;
+      color: #202124;
+      font-size: 16px;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    #start {
+      background: #1a73e8;
+      border-color: #1a73e8;
+      color: #fff;
+    }
+
+    #stop {
+      background: #d93025;
+      border-color: #d93025;
+      color: #fff;
+    }
+
+    #status {
+      display: block;
+      margin: 16px 0;
+      padding: 12px;
+      background: #f1f3f4;
+      border-radius: 8px;
+      overflow-wrap: anywhere;
+    }
+
+    label {
+      display: block;
+      margin-top: 20px;
+      margin-bottom: 8px;
+      font-weight: bold;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 110px;
+      padding: 12px;
+      border: 1px solid #dadce0;
+      border-radius: 8px;
+      font-size: 16px;
+      line-height: 1.6;
+      resize: vertical;
+    }
+
+    #result {
+      min-height: 90px;
+      padding: 12px;
+      border: 1px solid #dadce0;
+      border-radius: 8px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    audio {
+      display: block;
+      width: 100%;
+      margin-top: 16px;
+    }
+
+    audio[hidden] {
+      display: none;
+    }
+
+    input[type="file"] {
+      max-width: 100%;
+      font-size: 16px;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>음성 번역기</h1>
+
+  <p class="sub">
+    한국어로 말하면 받아 적고, 영어로 번역합니다. 최대 30초입니다.
+  </p>
+
+  <div class="controls">
+    <button id="start" disabled>🎤 녹음 시작</button>
+    <button id="stop" disabled>■ 녹음 종료</button>
+  </div>
+
+  <label for="audioFile">또는 음성 파일 선택</label>
+  <input id="audioFile" type="file" accept="audio/*" disabled />
+
+  <p class="note">
+    첫 실행에는 AI 모델 다운로드가 필요합니다.
+    Wi-Fi에 연결하고 준비 완료 메시지를 기다려 주세요.
+    업로드한 음성은 앞부분 최대 30초만 처리합니다.
+  </p>
+
+  <div id="status" role="status" aria-live="polite">
+    프로그램을 준비하고 있습니다...
+  </div>
+
+  <audio id="player" controls hidden></audio>
+
+  <label for="source">① 알아들은 한국어</label>
+
+  <textarea
+    id="source"
+    placeholder="음성 인식 결과가 표시됩니다. 직접 입력하거나 수정할 수도 있습니다."
+  ></textarea>
+
+  <button id="translate" disabled>한국어 문장 번역하기</button>
+
+  <label>② 영어 번역</label>
+  <div id="result" aria-live="polite"></div>
+
+  <script type="module">
+    // =========================================================
+    // 1. 음성 인식과 번역 설정
+    // =========================================================
+    const SPEECH_MODEL = "Xenova/whisper-base";
+    const SPEECH_LANGUAGE = "korean";
+    const TRANSLATE_MODEL = "Xenova/opus-mt-ko-en";
+    const MAX_SECONDS = 30;
+    const SAMPLE_RATE = 16000;
+
+    const startButton = document.getElementById("start");
+    const stopButton = document.getElementById("stop");
+    const fileInput = document.getElementById("audioFile");
+    const translateButton = document.getElementById("translate");
+    const statusBox = document.getElementById("status");
+    const sourceInput = document.getElementById("source");
+    const resultBox = document.getElementById("result");
+    const player = document.getElementById("player");
+
+    let transcriber = null;
+    let translator = null;
+
+    let ready = false;
+    let busy = false;
+    let recording = false;
+
+    let recorder = null;
+    let microphoneStream = null;
+    let stopTimer = null;
+    let countTimer = null;
+    let playbackUrl = null;
+
+    function setStatus(message) {
+      statusBox.textContent = message;
+    }
+
+    // 모델 준비 상태와 처리 상태에 따라 버튼을 제어합니다.
+    function updateButtons() {
+      startButton.disabled = !ready || busy || recording;
+      fileInput.disabled = !ready || busy || recording;
+      translateButton.disabled = !ready || busy || recording;
+      stopButton.disabled = !recording;
+      sourceInput.disabled = busy || recording;
+    }
+
+    // 원본 오류는 개발자 도구에 기록하고,
+    // 화면에는 한국어 안내를 표시합니다.
+    function showError(error) {
+      console.error(error);
+
+      switch (error.name) {
+        case "NotAllowedError":
+        case "SecurityError":
+          setStatus(
+            "❌ 마이크를 사용할 권한이 없습니다. 브라우저와 기기의 마이크 권한을 확인해 주세요."
+          );
+          break;
+
+        case "NotFoundError":
+        case "DevicesNotFoundError":
+          setStatus(
+            "❌ 사용 가능한 마이크를 찾을 수 없습니다. 마이크 연결과 기기의 입력 장치 설정을 확인해 주세요."
+          );
+          break;
+
+        case "NotReadableError":
+        case "TrackStartError":
+          setStatus(
+            "❌ 마이크에 접근할 수 없습니다. 다른 프로그램의 마이크 사용을 종료하고 기기의 입력 장치를 확인해 주세요."
+          );
+          break;
+
+        case "OverconstrainedError":
+          setStatus(
+            "❌ 현재 마이크가 요청한 녹음 조건을 지원하지 않습니다. 다른 입력 장치를 선택해 주세요."
+          );
+          break;
+
+        default:
+          setStatus(
+            error.userMessage ||
+            "❌ 처리 중 오류가 발생했습니다. 인터넷 연결과 음성 파일 형식을 확인하고 다시 시도해 주세요."
+          );
+      }
+    }
+
+    // 직접 발생시키는 오류에 한국어 안내문을 저장합니다.
+    function createError(message) {
+      const error = new Error(message);
+      error.userMessage = `❌ ${message}`;
+      return error;
+    }
+
+    // =========================================================
+    // 2. AI 라이브러리와 모델 준비
+    // =========================================================
+    async function initialize() {
+      try {
+        setStatus("AI 라이브러리를 불러오고 있습니다...");
+
+        const { pipeline, env } = await import(
+          "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.6"
+        );
+
+        env.allowLocalModels = false;
+
+        // WebGPU 대신 WASM 방식으로 실행합니다.
+        // 여러 실행 스레드에 필요한 추가 조건을 피합니다.
+        env.backends.onnx.wasm.numThreads = 1;
+
+        setStatus(
+          "1/2 음성 인식 모델을 불러오고 있습니다. 처음에는 시간이 걸릴 수 있습니다..."
+        );
+
+        transcriber = await pipeline(
+          "automatic-speech-recognition",
+          SPEECH_MODEL,
+          {
+            device: "wasm",
+            dtype: "q8"
+          }
+        );
+
+        setStatus(
+          "2/2 한국어 → 영어 번역 모델을 불러오고 있습니다..."
+        );
+
+        translator = await pipeline(
+          "translation",
+          TRANSLATE_MODEL,
+          {
+            device: "wasm",
+            dtype: "q8"
+          }
+        );
+
+        ready = true;
+
+        setStatus(
+          "준비 완료 · 녹음하거나 음성 파일을 선택해 주세요."
+        );
+      } catch (error) {
+        console.error(error);
+
+        setStatus(
+          "❌ AI 모델을 불러오지 못했습니다. 인터넷 연결을 확인하고 페이지를 새로고침해 주세요."
+        );
+      } finally {
+        updateButtons();
+      }
+    }
+
+    // =========================================================
+    // 3. 녹음 타이머와 마이크 정리
+    // =========================================================
+    function releaseMicrophone() {
+      clearTimeout(stopTimer);
+      clearInterval(countTimer);
+
+      stopTimer = null;
+      countTimer = null;
+
+      if (microphoneStream) {
+        microphoneStream.getTracks().forEach(track => track.stop());
+        microphoneStream = null;
+      }
+    }
+
+    function stopRecording() {
+      if (!recorder || recorder.state !== "recording") return;
+
+      stopButton.disabled = true;
+      setStatus("녹음을 종료하고 있습니다...");
+
+      recorder.stop();
+      releaseMicrophone();
+    }
+
+    // =========================================================
+    // 4. 마이크 녹음 시작
+    // =========================================================
+    async function startRecording() {
+      if (!ready || busy || recording) return;
+
+      busy = true;
+      updateButtons();
+
+      try {
+        if (!window.isSecureContext) {
+          throw createError(
+            "녹음에는 보안 연결이 필요합니다. 배포한 HTTPS 주소로 접속해 주세요."
+          );
+        }
+
+        if (!navigator.mediaDevices?.getUserMedia) {
+          throw createError(
+            "현재 브라우저에서 마이크를 사용할 수 없습니다. Chrome 또는 Safari에서 다시 열어 주세요."
+          );
+        }
+
+        if (!window.MediaRecorder) {
+          throw createError(
+            "현재 브라우저에서 녹음을 지원하지 않습니다. 음성 파일을 선택해 주세요."
+          );
+        }
+
+        setStatus("마이크 사용 권한을 확인하고 있습니다...");
+
+        microphoneStream = await navigator.mediaDevices.getUserMedia({
+          audio: true
+        });
+
+        // 기기에 맞는 녹음 파일 형식을 선택합니다.
+        const candidates = [
+          "audio/webm;codecs=opus",
+          "audio/mp4",
+          "audio/webm",
+          "audio/ogg;codecs=opus"
+        ];
+
+        const mimeType = candidates.find(type =>
+          MediaRecorder.isTypeSupported(type)
+        );
+
+        recorder = mimeType
+          ? new MediaRecorder(microphoneStream, { mimeType })
+          : new MediaRecorder(microphoneStream);
+
+        const activeRecorder = recorder;
+        const chunks = [];
+        let recordingError = null;
+
+        // 녹음된 음성 데이터를 모읍니다.
+        activeRecorder.ondataavailable = event => {
+          if (event.data.size > 0) {
+            chunks.push(event.data);
+          }
+        };
+
+        activeRecorder.onerror = event => {
+          recordingError =
+            event.error ||
+            createError("녹음 중 오류가 발생했습니다.");
+
+          showError(recordingError);
+          stopRecording();
+        };
+
+        // 녹음이 끝나면 음성 인식과 번역을 실행합니다.
+        activeRecorder.onstop = async () => {
+          releaseMicrophone();
+          recording = false;
+          recorder = null;
+
+          try {
+            if (recordingError) throw recordingError;
+
+            const blob = new Blob(chunks, {
+              type:
+                activeRecorder.mimeType ||
+                chunks[0]?.type ||
+                ""
+            });
+
+            if (blob.size === 0) {
+              throw createError(
+                "녹음된 데이터가 없습니다. 다시 녹음해 주세요."
+              );
+            }
+
+            await processAudio(blob);
+          } catch (error) {
+            showError(error);
+          } finally {
+            busy = false;
+            updateButtons();
+          }
+        };
+
+        resultBox.textContent = "";
+        sourceInput.value = "";
+
+        activeRecorder.start();
+        recording = true;
+
+        const startedAt = performance.now();
+
+        setStatus(`녹음 중 · 0초 / ${MAX_SECONDS}초`);
+
+        countTimer = setInterval(() => {
+          const elapsed = Math.min(
+            MAX_SECONDS,
+            Math.floor((performance.now() - startedAt) / 1000)
+          );
+
+          setStatus(`녹음 중 · ${elapsed}초 / ${MAX_SECONDS}초`);
+        }, 500);
+
+        // 최대 녹음 시간이 되면 자동으로 종료합니다.
+        stopTimer = setTimeout(
+          stopRecording,
+          MAX_SECONDS * 1000
+        );
+
+        updateButtons();
+      } catch (error) {
+        releaseMicrophone();
+
+        recorder = null;
+        recording = false;
+        busy = false;
+
+        showError(error);
+        updateButtons();
+      }
+    }
+
+    // =========================================================
+    // 5. 음성을 16kHz 모노 음성으로 변환
+    // =========================================================
+    async function decodeAudio(blob) {
+      const AudioContextClass =
+        window.AudioContext || window.webkitAudioContext;
+
+      const OfflineContextClass =
+        window.OfflineAudioContext ||
+        window.webkitOfflineAudioContext;
+
+      if (!AudioContextClass || !OfflineContextClass) {
+        throw createError(
+          "현재 브라우저에서 음성 변환을 지원하지 않습니다."
+        );
+      }
+
+      const context = new AudioContextClass();
+
+      try {
+        const arrayBuffer = await blob.arrayBuffer();
+
+        let decoded;
+
+        try {
+          decoded = await context.decodeAudioData(arrayBuffer);
+        } catch (error) {
+          console.error(error);
+
+          throw createError(
+            "음성 파일을 읽지 못했습니다. 다른 파일 형식으로 다시 시도해 주세요."
+          );
+        }
+
+        if (decoded.duration <= 0) {
+          throw createError("음성 파일의 길이가 0초입니다.");
+        }
+
+        const duration = Math.min(
+          decoded.duration,
+          MAX_SECONDS
+        );
+
+        const frameCount = Math.max(
+          1,
+          Math.ceil(duration * SAMPLE_RATE)
+        );
+
+        const offline = new OfflineContextClass(
+          1,
+          frameCount,
+          SAMPLE_RATE
+        );
+
+        const audioSource = offline.createBufferSource();
+
+        audioSource.buffer = decoded;
+        audioSource.connect(offline.destination);
+        audioSource.start(0);
+
+        const rendered = await offline.startRendering();
+
+        return {
+          samples: rendered.getChannelData(0),
+          truncated: decoded.duration > MAX_SECONDS
+        };
+      } finally {
+        await context.close();
+      }
+    }
+
+    // =========================================================
+    // 6. 한국어 받아쓰기 → 영어 번역
+    // =========================================================
+    async function processAudio(blob) {
+      if (playbackUrl) {
+        URL.revokeObjectURL(playbackUrl);
+      }
+
+      playbackUrl = URL.createObjectURL(blob);
+      player.src = playbackUrl;
+      player.hidden = false;
+
+      sourceInput.value = "";
+      resultBox.textContent = "";
+
+      setStatus("음성 데이터를 변환하고 있습니다...");
+
+      const { samples, truncated } = await decodeAudio(blob);
+
+      setStatus(
+        truncated
+          ? "앞부분 30초의 한국어 음성을 받아쓰고 있습니다..."
+          : "한국어 음성을 받아쓰고 있습니다..."
+      );
+
+      const speechStart = performance.now();
+
+      const speechOutput = await transcriber(samples, {
+        language: SPEECH_LANGUAGE,
+        task: "transcribe",
+        max_new_tokens: 256
+      });
+
+      const speechSeconds = (
+        (performance.now() - speechStart) / 1000
+      ).toFixed(1);
+
+      const koreanText = speechOutput.text?.trim() || "";
+
+      if (!koreanText) {
+        throw createError(
+          "음성을 인식하지 못했습니다. 짧은 문장을 또렷하게 말해 주세요."
+        );
+      }
+
+      sourceInput.value = koreanText;
+
+      setStatus("영어로 번역하고 있습니다...");
+
+      const translationStart = performance.now();
+
+      const output = await translator(koreanText, {
+        max_new_tokens: 256
+      });
+
+      const englishText =
+        output[0]?.translation_text?.trim();
+
+      if (!englishText) {
+        throw createError("번역 결과가 없습니다.");
+      }
+
+      const translationSeconds = (
+        (performance.now() - translationStart) / 1000
+      ).toFixed(1);
+
+      resultBox.textContent = englishText;
+
+      setStatus(
+        `완료 · 받아쓰기 ${speechSeconds}초 · 번역 ${translationSeconds}초` +
+        (truncated ? " · 앞부분 30초만 처리했습니다." : "")
+      );
+    }
+
+    // =========================================================
+    // 7. 음성 파일 선택
+    // =========================================================
+    fileInput.addEventListener("change", async () => {
+      const file = fileInput.files[0];
+
+      if (!file || !ready || busy || recording) return;
+
+      busy = true;
+      updateButtons();
+
+      try {
+        await processAudio(file);
+      } catch (error) {
+        showError(error);
+      } finally {
+        fileInput.value = "";
+        busy = false;
+        updateButtons();
+      }
+    });
+
+    // =========================================================
+    // 8. 직접 입력하거나 수정한 한국어 문장 번역
+    // =========================================================
+    translateButton.addEventListener("click", async () => {
+      if (!ready || busy || recording) return;
+
+      const text = sourceInput.value.trim();
+
+      if (!text) {
+        setStatus("번역할 한국어 문장을 먼저 입력해 주세요.");
+        return;
+      }
+
+      busy = true;
+      updateButtons();
+      resultBox.textContent = "";
+
+      try {
+        setStatus("영어로 번역하고 있습니다...");
+
+        const startedAt = performance.now();
+
+        const output = await translator(text, {
+          max_new_tokens: 256
+        });
+
+        const translated =
+          output[0]?.translation_text?.trim();
+
+        if (!translated) {
+          throw createError("번역 결과가 없습니다.");
+        }
+
+        resultBox.textContent = translated;
+
+        const seconds = (
+          (performance.now() - startedAt) / 1000
+        ).toFixed(1);
+
+        setStatus(`번역 완료 · ${seconds}초`);
+      } catch (error) {
+        showError(error);
+      } finally {
+        busy = false;
+        updateButtons();
+      }
+    });
+
+    startButton.addEventListener("click", startRecording);
+    stopButton.addEventListener("click", stopRecording);
+
+    // 페이지를 닫으면 마이크와 재생 주소를 정리합니다.
+    window.addEventListener("pagehide", () => {
+      releaseMicrophone();
+
+      if (playbackUrl) {
+        URL.revokeObjectURL(playbackUrl);
+      }
+    });
+
+    initialize();
+  </script>
+</body>
+</html>
