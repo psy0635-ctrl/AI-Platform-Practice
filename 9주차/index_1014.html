@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<!-- ============================================================
+     9주차 과제 · 나만의 한 줄 도우미 (웹 버전 · index.html)
+     ------------------------------------------------------------
+     Colab 과제의 my_helper(text) 와 같은 일을 브라우저에서 함
+     · Static Space 에 그대로 올리면 됨 (서버 · 설치 없음)
+     · ★ API 키는 코드에 절대 적지 않음 → 쓰는 사람이 화면에서 직접 입력
+       입력한 키는 이 탭의 메모리에만 있고, 탭을 닫으면 사라짐 (어디에도 저장하지 않음)
+     ★ 고칠 곳 표시가 붙은 줄만 바꾸면 내 도우미가 됨
+     ============================================================ -->
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>영어 문장 고치미</title>   <!-- ★ 고칠 곳 ① -->
+  <style>
+    body { font-family: "맑은 고딕", sans-serif; max-width: 720px; margin: 24px auto; padding: 0 16px; color: #202124; }
+    h1 { font-size: 24px; margin-bottom: 4px; }
+    .sub { color: #5f6368; margin-top: 0; }
+    .warn { background: #fff8e1; border: 1px solid #f0d48a; border-radius: 6px; padding: 8px 12px; font-size: 14px; }
+    label { display: block; font-weight: bold; margin: 14px 0 4px; }
+    input[type=password], textarea { width: 100%; box-sizing: border-box; font-size: 15px; padding: 8px; }
+    textarea { height: 90px; }
+    button { padding: 8px 16px; font-size: 15px; margin-top: 8px; }
+    button:disabled { opacity: 0.4; }
+    #status { display: block; margin: 12px 0; padding: 8px 12px; background: #f1f3f4; border-radius: 6px; }
+    #answer { padding: 12px; min-height: 40px; border: 1px solid #dadce0; border-radius: 6px; font-size: 15px; line-height: 1.6; white-space: pre-wrap; }
+    #usage { color: #5f6368; font-size: 14px; margin-top: 6px; }
+  </style>
+</head>
+<body>
+  <!-- ★ 고칠 곳 ② -->
+  <h1>영어 문장 고치미</h1>
+  <p class="sub">
+  영어 문장의 문법을 고치고, 수정 이유를 한국어 한 줄로 알려 줍니다.</p>
+
+  <p class="warn">⚠ 이름 · 학번 · 전화번호 같은 개인정보는 넣지 마세요. 무료 등급에 보낸 글은 구글이 제품 개선에 쓸 수 있습니다.</p>
+
+  <label for="keyInput">① 내 Gemini API 키</label>
+  <input type="password" id="keyInput" autocomplete="off" placeholder="AI Studio 에서 복사한 키를 붙여 넣기" />
+  <small>키는 이 탭에만 잠시 있고 저장되지 않음 · 탭을 닫으면 사라짐</small>
+
+  <label for="textInput">② 도움받을 글</label>
+  <textarea id="textInput">She don't like apples.</textarea>
+  <button id="runButton">도와줘</button>
+
+  <span id="status">키와 글을 넣고 [도와줘] 를 누르세요</span>
+  <div id="answer"></div>
+  <div id="usage"></div>
+
+  <script>
+    // ★ 고칠 곳 ③ — 지시 문장 (Colab 과제의 HELPER_INSTRUCTION 과 같은 역할)
+    const HELPER_INSTRUCTION =  "다음 영어 문장의 문법을 고치고, 수정한 문장과 고친 이유를 한국어 한 줄로 알려 줘.";
+
+    const MODEL_NAME = "gemini-3.5-flash-lite";
+    const API_URL = "https://generativelanguage.googleapis.com/v1beta/interactions";
+    const INPUT_PRICE_PER_MILLION = 0.30;    // 달러 (유료였다면 · 계산용)
+    const OUTPUT_PRICE_PER_MILLION = 2.50;   // 달러 (생각 토큰 포함)
+    const WON_PER_DOLLAR = 1400;             // ★ 가정값 — 오늘 환율로 바꿀 것
+    const TIMEOUT_SECONDS = 120;             // 2분 안에 답이 없으면 멈춤
+
+const keyInput = document.getElementById("keyInput");
+const textInput = document.getElementById("textInput");
+const runButton = document.getElementById("runButton");
+const statusBox = document.getElementById("status");
+const answerBox = document.getElementById("answer");
+const usageBox = document.getElementById("usage");
+
+    // 상태 번호를 한글 안내로 바꿈 (Colab 의 safe_ask 와 같은 역할)
+    function explainError(code, message) {
+      if (code === 400) return "❌ 요청이 잘못됨 — 키를 다시 복사했는지, 모델 이름 철자를 확인하세요.";
+      if (code === 402) return "💳 결제가 연결된 프로젝트의 키임 — AI Studio 에서 새 프로젝트로 키를 다시 만드세요.";
+      if (code === 403) return "❌ 권한 없음 — AI Studio 에서 키 상태를 확인하세요.";
+      if (code === 404) return "❌ 없는 모델 — MODEL_NAME 철자를 확인하세요.";
+      if (code === 429) return "⏳ 한도를 넘음 — 1분 기다렸다 다시 해 보세요. (하루 한도면 다음 날)";
+      return `❌ 오류 (상태 번호 ${code}) : ${message}`;
+    }
+
+    // 유료였다면 얼마인지 계산 (Colab 의 estimate_cost 와 같음)
+    function estimateCost(usage) {
+      const inputTokens = usage.total_input_tokens || 0;
+      const outputTokens = (usage.total_output_tokens || 0) + (usage.total_thought_tokens || 0);
+      const dollars = (inputTokens * INPUT_PRICE_PER_MILLION + outputTokens * OUTPUT_PRICE_PER_MILLION) / 1000000;
+      return dollars * WON_PER_DOLLAR;
+    }
+
+    // 응답에서 답 글만 꺼냄 (Colab 의 .output_text 와 같은 일)
+    // 응답 모양 : { steps: [ { type: "model_output", content: [ { type: "text", text: "..." } ] } ], usage: {...} }
+    function getOutputText(data) {
+      return (data.steps || [])
+        .filter((step) => step.type === "model_output")
+        .flatMap((step) => step.content || [])
+        .filter((part) => part.type === "text")
+        .map((part) => part.text)
+        .join("");
+    }
+
+    // 답 글의 **굵게** 표시를 진짜 굵은 글씨로 바꿈
+    // 먼저 < > & 를 글자로 바꿔(escape) 답 글 속 태그가 실행되지 않게 한 뒤, ** 만 <strong> 으로 바꿈
+    function showAnswer(text) {
+      const safe = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      answerBox.innerHTML = safe.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+    }
+
+    async function myHelper() {
+      const apiKey = keyInput.value.trim();
+      const text = textInput.value.trim();
+      if (apiKey === "") { statusBox.textContent = "① 에 API 키를 먼저 넣으세요."; return; }
+      if (text === "") { statusBox.textContent = "② 에 도움받을 글을 넣으세요."; return; }
+
+      runButton.disabled = true;
+      answerBox.textContent = "";
+      usageBox.textContent = "";
+      statusBox.textContent = "답을 기다리는 중...";
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), TIMEOUT_SECONDS * 1000);
+      const start = performance.now();
+
+      try {
+        const response = await fetch(API_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+          body: JSON.stringify({ model: MODEL_NAME, input: HELPER_INSTRUCTION + "\n\n" + text }),
+          signal: controller.signal,
+        });
+        let data = await response.json().catch(() => ({}));
+        if (Array.isArray(data)) data = data[0] || {};          // 오류가 [ {...} ] 모양으로 올 때도 있음
+
+        if (!response.ok) {
+          const message = (data.error && data.error.message) || response.statusText;
+          statusBox.textContent = explainError(response.status, message);
+          return;
+        }
+
+        const seconds = ((performance.now() - start) / 1000).toFixed(1);
+        showAnswer(getOutputText(data));
+        const usage = data.usage || {};
+        usageBox.textContent = `토큰 : 입력 ${usage.total_input_tokens ?? "-"} · 출력 ${usage.total_output_tokens ?? "-"} · 전체 ${usage.total_tokens ?? "-"}`
+          + ` · 유료였다면 약 ${estimateCost(usage).toFixed(4)}원`;
+        statusBox.textContent = `완료 · ${seconds}초 · 모델 ${MODEL_NAME}`;
+      } catch (error) {
+        if (error.name === "AbortError") statusBox.textContent = `⏳ ${TIMEOUT_SECONDS}초 안에 답이 없어 멈춤 — 잠시 뒤 다시 해 보세요.`;
+        else statusBox.textContent = `❌ 서버에 닿지 못함 (인터넷 연결 확인) : ${error.message}`;
+      } finally {
+        clearTimeout(timer);
+        runButton.disabled = false;
+      }
+    }
+
+    runButton.addEventListener("click", myHelper);
+  </script>
+</body>
+</html>
