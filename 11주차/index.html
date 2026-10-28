@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <!-- ★ 고칠 곳 ① : 브라우저 탭 이름 -->
+  <title>캠퍼스 패션봇</title>
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: "맑은 고딕", sans-serif;
+      max-width: 720px;
+      margin: 24px auto;
+      padding: 0 16px;
+      color: #202124;
+      background: #ffffff;
+    }
+
+    h1 {
+      font-size: 24px;
+      margin-bottom: 4px;
+    }
+
+    .sub {
+      color: #5f6368;
+      margin-top: 0;
+      line-height: 1.6;
+    }
+
+    .warn {
+      background: #fff8e1;
+      border: 1px solid #f0d48a;
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 14px;
+      font-weight: bold;
+    }
+
+    input[type="password"],
+    input[type="text"] {
+      width: 100%;
+      font-size: 15px;
+      padding: 10px;
+      border: 1px solid #dadce0;
+      border-radius: 6px;
+    }
+
+    #chatBox {
+      border: 1px solid #dadce0;
+      border-radius: 8px;
+      padding: 12px;
+      height: 420px;
+      overflow-y: auto;
+      background: #fafafa;
+      margin: 12px 0;
+    }
+
+    .bubble {
+      max-width: 85%;
+      padding: 10px 12px;
+      border-radius: 12px;
+      margin: 8px 0;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      font-size: 15px;
+    }
+
+    .user {
+      background: #e8def8;
+      margin-left: auto;
+    }
+
+    .bot {
+      background: #ffffff;
+      border: 1px solid #dadce0;
+    }
+
+    .row {
+      display: flex;
+      gap: 8px;
+    }
+
+    .row input {
+      flex: 1;
+      min-width: 0;
+    }
+
+    button {
+      padding: 10px 14px;
+      font-size: 15px;
+      border: 1px solid #dadce0;
+      border-radius: 6px;
+      background: #ffffff;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    #sendButton {
+      background: #6750a4;
+      border-color: #6750a4;
+      color: #ffffff;
+    }
+
+    button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    #status {
+      display: block;
+      margin: 8px 0;
+      padding: 8px 12px;
+      background: #f1f3f4;
+      border-radius: 6px;
+      font-size: 14px;
+      line-height: 1.5;
+      overflow-wrap: anywhere;
+    }
+
+    .hint {
+      color: #5f6368;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    @media (max-width: 480px) {
+      body {
+        margin: 16px auto;
+        padding: 0 12px;
+      }
+
+      #chatBox {
+        height: 380px;
+      }
+
+      .row {
+        flex-wrap: wrap;
+      }
+
+      .row input {
+        flex-basis: 100%;
+      }
+
+      .row button {
+        flex: 1;
+      }
+
+      .bubble {
+        max-width: 92%;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <!-- ★ 고칠 곳 ② : 화면 제목과 소개 -->
+  <h1>👕 캠퍼스 패션봇</h1>
+  <p class="sub">
+    가지고 있는 옷으로 대학 생활에 어울리는 코디를 함께 만들어 보세요.
+  </p>
+
+  <p class="warn">
+    ⚠ 이름 · 학번 · 전화번호 같은 개인정보는 입력하지 마세요.
+    API 키는 아래 입력칸에만 넣고 코드에는 적지 마세요.
+    입력한 메시지는 답변 생성을 위해 Google API로 전송됩니다.
+  </p>
+
+  <label for="keyInput">Gemini API 키</label>
+  <input
+    type="password"
+    id="keyInput"
+    autocomplete="off"
+    spellcheck="false"
+    placeholder="API 키 입력 · 앱에서 별도로 저장하지 않음"
+  />
+
+  <div
+    id="chatBox"
+    role="log"
+    aria-label="챗봇 대화"
+    aria-live="polite"
+  ></div>
+
+  <div class="row">
+    <input
+      type="text"
+      id="messageInput"
+      aria-label="메시지"
+      autocomplete="off"
+      placeholder="예: 흰 셔츠와 검정 슬랙스로 코디해 주세요."
+    />
+    <button id="sendButton" type="button">보내기</button>
+    <button id="resetButton" type="button">새 대화</button>
+  </div>
+
+  <span id="status" role="status">준비 완료</span>
+
+  <p class="hint">
+    최근 6턴을 기준으로 대화를 이어갑니다.
+    새 대화 버튼은 대화 기록을 지우며, API 키 입력칸은 유지합니다.
+    화면에 남아 있는 오래된 대화도 모델에게는 전달되지 않을 수 있습니다.
+  </p>
+
+  <script>
+    "use strict";
+
+    // ★ 고칠 곳 ③ : 과제 1단계와 같은 시스템 프롬프트
+    const SYSTEM_PROMPT = `
+너는 '캠퍼스 패션봇'이야.
+대학생이 가지고 있는 옷을 활용해 상황에 맞는 코디를
+쉽게 구성하도록 돕는 패션 도우미 챗봇이야.
+
+규칙 1. 말투와 답변 길이
+친근한 존댓말로 답한다.
+매 답변은 인사와 자기소개를 생략하고 1~4문장으로 작성한다.
+추천 조합과 이유를 중심으로 간결하게 설명한다.
+답변을 보내기 전에 전체 문장 수가 4문장 이하인지 확인한다.
+어려운 패션 용어를 사용하면 쉬운 설명을 함께 덧붙인다.
+
+규칙 2. 할 일
+옷, 신발, 가방의 조합과 색상 매치, 상황에 맞는 코디를 안내한다.
+사용자가 가진 옷과 원하는 스타일을 우선 활용한다.
+코디를 추천할 때는 구체적인 조합과 추천 이유를 함께 설명한다.
+추가 정보가 필요하면 보유한 옷이나 선호하는 스타일을 질문한다.
+
+규칙 3. 대화 기억
+현재 대화 기록에 있는 옷, 색상, 선호 스타일을 참고해 답한다.
+'그 코디', '아까 말한 옷' 같은 표현은 앞선 대화와 연결해서 이해한다.
+기록에 없는 내용은 기억하는 척하지 말고 다시 알려 달라고 요청한다.
+
+규칙 4. 주제 밖 질문
+패션과 관련 없는 질문에는 다른 설명을 덧붙이지 않고
+'저는 패션 도우미라서 그 질문은 어려워요.'라고만 답한다.
+
+규칙 5. 모르는 정보
+특정 상품의 현재 가격, 재고, 할인 여부, 매장 영업시간,
+실시간 유행 순위처럼 직접 확인하지 못한 정보는 지어내지 않는다.
+해당 정보를 확인할 수 없다고 밝히고,
+브랜드 공식 홈페이지, 공식 온라인몰 또는 해당 매장에 확인하도록 안내한다.
+웹 검색이나 실시간 조회를 했다고 말하지 않는다.
+
+규칙 6. 개인정보
+이름, 학번, 전화번호, 주소, 계정 비밀번호 같은 개인정보를 요구하지 않는다.
+사용자가 개인정보를 입력하더라도 답변에 다시 적거나 추가로 묻지 않는다.
+코디에 불필요한 신체 정보나 얼굴 사진을 요구하지 않는다.
+
+규칙 7. 추천 태도
+성별이나 체형만으로 어울리는 옷을 단정하지 않는다.
+외모를 평가하거나 특정 체형을 비하하지 않는다.
+사용자의 취향과 편안함을 존중하고 구매를 강요하지 않는다.
+`.trim();
+
+    const WELCOME =
+      "안녕하세요! 캠퍼스 패션봇입니다. " +
+      "가지고 있는 옷과 입고 갈 상황을 알려 주시면 " +
+      "어울리는 코디를 추천해 드릴게요.";
+
+    // 새 질문까지 포함해 최근 6개의 사용자 질문부터 전달합니다.
+    // 7번째 질문부터 가장 오래된 질문과 그 답변이 제외됩니다.
+    const MAX_TURNS = 6;
+
+    const MODEL_NAME = "gemini-3.5-flash-lite";
+    const API_URL =
+      "https://generativelanguage.googleapis.com/v1beta/interactions";
+    const TIMEOUT_SECONDS = 120;
+
+    const $ = (id) => document.getElementById(id);
+
+    // API 키와 대화 기록을 localStorage 등에 저장하지 않습니다.
+    let history = [];
+    let isSending = false;
+
+    // ---------- 말풍선 그리기 ----------
+    function addBubble(text, who) {
+      const bubble = document.createElement("div");
+      bubble.className = "bubble " + who;
+
+      // HTML로 해석하지 않고 텍스트로 표시합니다.
+      // **굵게** 표시만 DOM 요소로 처리합니다.
+      const pieces = String(text).split(/(\*\*[^*\n]+\*\*)/g);
+
+      for (const piece of pieces) {
+        if (piece.startsWith("**") && piece.endsWith("**")) {
+          const strong = document.createElement("strong");
+          strong.textContent = piece.slice(2, -2);
+          bubble.appendChild(strong);
+        } else {
+          bubble.appendChild(document.createTextNode(piece));
+        }
+      }
+
+      $("chatBox").appendChild(bubble);
+      $("chatBox").scrollTop = $("chatBox").scrollHeight;
+
+      return bubble;
+    }
+
+    // ---------- 最近 MAX_TURNS 개의 질문부터 기록 유지 ----------
+    function trimHistory(list) {
+      const userIndexes = [];
+
+      list.forEach((step, index) => {
+        if (step.type === "user_input") {
+          userIndexes.push(index);
+        }
+      });
+
+      if (userIndexes.length <= MAX_TURNS) {
+        return list.slice();
+      }
+
+      const startIndex =
+        userIndexes[userIndexes.length - MAX_TURNS];
+
+      return list.slice(startIndex);
+    }
+
+    // ---------- 요청 중 입력과 버튼 상태 ----------
+    function setBusy(busy) {
+      isSending = busy;
+      $("sendButton").disabled = busy;
+      $("resetButton").disabled = busy;
+      $("messageInput").disabled = busy;
+      $("keyInput").disabled = busy;
+      $("chatBox").setAttribute("aria-busy", String(busy));
+    }
+
+    // ---------- 오류 안내 ----------
+    function explainError(code) {
+      if (code === 400) {
+        return "❌ 요청 오류(400): API 키와 요청 형식을 확인하세요.";
+      }
+
+      if (code === 401) {
+        return "❌ 인증 오류(401): API 키가 올바른지 확인하세요.";
+      }
+
+      if (code === 402) {
+        return "❌ 결제 관련 오류(402): AI Studio에서 프로젝트의 결제 상태를 확인하세요.";
+      }
+
+      if (code === 403) {
+        return "❌ 권한 오류(403): API 키의 권한과 사용 제한을 확인하세요.";
+      }
+
+      if (code === 404) {
+        return "❌ 찾을 수 없음(404): 모델 이름과 API 주소를 확인하세요.";
+      }
+
+      if (code === 429) {
+        return "⏳ 요청 한도 또는 할당량 초과(429): 잠시 후 다시 시도하세요. 계속되면 AI Studio에서 할당량을 확인하세요.";
+      }
+
+      if (code >= 500) {
+        return `❌ 서버 오류(${code}): 잠시 후 다시 시도하세요.`;
+      }
+
+      return `❌ 요청 실패: 상태 번호 ${code}`;
+    }
+
+    // ---------- 응답에서 모델의 답변 글 추출 ----------
+    function getOutputText(steps) {
+      return steps
+        .filter((step) => step.type === "model_output")
+        .flatMap((step) => {
+          return Array.isArray(step.content) ? step.content : [];
+        })
+        .filter((part) => {
+          return part.type === "text" &&
+            typeof part.text === "string";
+        })
+        .map((part) => part.text)
+        .join("\n")
+        .trim();
+    }
+
+    // ---------- 메시지 보내기 ----------
+    async function sendMessage() {
+      // 버튼 클릭뿐 아니라 Enter 연타도 막습니다.
+      if (isSending) return;
+
+      const apiKey = $("keyInput").value.trim();
+      const message = $("messageInput").value.trim();
+
+      if (apiKey === "") {
+        $("status").textContent = "먼저 Gemini API 키를 입력하세요.";
+        $("keyInput").focus();
+        return;
+      }
+
+      if (message === "") {
+        $("messageInput").focus();
+        return;
+      }
+
+      const userStep = {
+        type: "user_input",
+        content: [
+          {
+            type: "text",
+            text: message
+          }
+        ]
+      };
+
+      // 성공하기 전에는 실제 history를 바꾸지 않습니다.
+      const sendList = trimHistory([...history, userStep]);
+
+      const pendingBubble = addBubble(message, "user");
+      $("messageInput").value = "";
+      setBusy(true);
+      $("status").textContent = "코디 답변을 기다리는 중...";
+
+      const controller = new AbortController();
+      const timer = setTimeout(
+        () => controller.abort(),
+        TIMEOUT_SECONDS * 1000
+      );
+
+      let succeeded = false;
+
+      try {
+        const response = await fetch(API_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-goog-api-key": apiKey
+          },
+          body: JSON.stringify({
+            model: MODEL_NAME,
+            store: false,
+            system_instruction: SYSTEM_PROMPT,
+            input: sendList
+          }),
+          signal: controller.signal
+        });
+
+        if (!response.ok) {
+          $("status").textContent =
+            explainError(response.status);
+          return;
+        }
+
+        let data;
+
+        try {
+          data = await response.json();
+        } catch {
+          $("status").textContent =
+            "❌ 서버 응답을 읽지 못했습니다. 다시 시도하세요.";
+          return;
+        }
+
+        if (Array.isArray(data)) {
+          data = data[0];
+        }
+
+        if (
+          !data ||
+          typeof data !== "object" ||
+          !Array.isArray(data.steps)
+        ) {
+          $("status").textContent =
+            "❌ 응답 형식이 예상과 다릅니다. 대화 기록은 변경하지 않았습니다.";
+          return;
+        }
+
+        const steps = data.steps;
+        const answer = getOutputText(steps);
+
+        if (answer === "") {
+          $("status").textContent =
+            "❌ 텍스트 답변이 없습니다. 질문을 바꾸어 다시 시도하세요.";
+          return;
+        }
+
+        // 정상적인 답변이 있을 때만 질문과 응답을 기록합니다.
+        history = [...sendList, ...steps];
+        succeeded = true;
+
+        addBubble(answer, "bot");
+
+        const turns = history.filter(
+          (step) => step.type === "user_input"
+        ).length;
+
+        const inputTokens =
+          data.usage?.total_input_tokens ?? "-";
+
+        $("status").textContent =
+          `기억 중인 턴 ${turns} / ${MAX_TURNS}` +
+          ` · 이번 요청 입력 토큰 ${inputTokens}`;
+
+      } catch (error) {
+        $("status").textContent =
+          error.name === "AbortError"
+            ? `⏳ ${TIMEOUT_SECONDS}초 안에 답이 없어 중단했습니다. 다시 시도하세요.`
+            : "❌ 연결 실패: 인터넷 연결이나 브라우저의 요청 차단 여부를 확인하세요.";
+
+      } finally {
+        clearTimeout(timer);
+
+        if (!succeeded) {
+          // 실패한 질문은 화면에서도 제거하고 입력칸에 복원합니다.
+          // API에 보낼 기록과 화면이 어긋나는 일을 줄입니다.
+          pendingBubble.remove();
+          $("messageInput").value = message;
+        }
+
+        setBusy(false);
+        $("messageInput").focus();
+      }
+    }
+
+    // ---------- 새 대화 ----------
+    function resetChat() {
+      if (isSending) return;
+
+      history = [];
+      $("chatBox").replaceChildren();
+      $("messageInput").value = "";
+
+      addBubble(WELCOME, "bot");
+
+      $("status").textContent =
+        `새 대화 시작 · 기억 중인 턴 0 / ${MAX_TURNS}`;
+
+      $("messageInput").focus();
+    }
+
+    $("sendButton").addEventListener("click", sendMessage);
+
+    $("messageInput").addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.isComposing) {
+        event.preventDefault();
+        sendMessage();
+      }
+    });
+
+    $("resetButton").addEventListener("click", resetChat);
+
+    resetChat();
+  </script>
+</body>
+</html>
